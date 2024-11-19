@@ -4,16 +4,22 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Send } from "lucide-react";
 
+interface Message {
+  id: number;
+  content: string;
+  sender: "user" | "bot";
+}
+
 const ChatInterface = () => {
-  const [messages, setMessages] = useState([]);
-  const [inputMessage, setInputMessage] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]); // Tipagem explícita
+  const [inputMessage, setInputMessage] = useState<string>("");
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   const handleSendMessage = async () => {
     if (!inputMessage.trim()) return;
     setIsLoading(true);
 
-    const userMessage = {
+    const userMessage: Message = {
       id: Date.now(),
       content: inputMessage,
       sender: "user",
@@ -33,7 +39,7 @@ const ChatInterface = () => {
 
       const data = await response.json();
 
-      const botMessage = {
+      const botMessage: Message = {
         id: Date.now() + 1,
         content: data.response,
         sender: "bot",
@@ -51,7 +57,7 @@ const ChatInterface = () => {
     <div className="flex flex-col h-screen bg-gray-900">
       {/* Header */}
       <div className="bg-gray-800 p-4 shadow">
-        <h1 className="text-xl font-bold text-white">ChatBot AI</h1>
+        <h1 className="text-xl font-bold text-white">My Chatbot</h1>
       </div>
 
       {/* Chat Container */}
