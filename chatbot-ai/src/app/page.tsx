@@ -22,14 +22,14 @@ interface Conversation {
 
 const ChatInterface = () => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversation, setActiveConversation] = useState<Conversation | null>(
-    null
-  );
+  const [activeConversation, setActiveConversation] =
+    useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [editingTitle, setEditingTitle] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState<string>("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -43,10 +43,12 @@ const ChatInterface = () => {
   }, [activeConversation]);
 
   useEffect(() => {
-    if (editingTitle && titleInputRef.current) {
-      titleInputRef.current.focus();
-    }
-  }, [editingTitle]);
+    scrollToBottom();
+  }, [messages]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
 
   const loadConversations = async () => {
     const { data, error } = await supabase
@@ -80,8 +82,8 @@ const ChatInterface = () => {
     setMessages(data || []);
   };
 
-  const createNewConversation = async () => {
-    const title = `New conversation ${conversations.length + 1}`;
+  const createNewConversation = async (): Promise<Conversation | null> => {
+    const title = `Nova conversa ${conversations.length + 1}`;
     const { data, error } = await supabase
       .from("conversations")
       .insert([{ title }])
@@ -90,12 +92,12 @@ const ChatInterface = () => {
 
     if (error) {
       console.error("Error creating conversation:", error);
-      return;
+      return null;
     }
 
-    setConversations([data, ...conversations]);
-    setActiveConversation(data);
-    setMessages([]);
+    const newConversation = data as Conversation;
+    setConversations([newConversation, ...conversations]);
+    return newConversation;
   };
 
   const deleteConversation = async (conversationId: string) => {
@@ -119,82 +121,78 @@ const ChatInterface = () => {
     }
   };
 
-  const startEditingTitle = (conversation: Conversation) => {
-    setEditingTitle(conversation.id);
-    setNewTitle(conversation.title);
-  };
-
-  const saveTitle = async (conversationId: string) => {
-    if (!newTitle.trim()) return;
-
-    const { error } = await supabase
-      .from("conversations")
-      .update({ title: newTitle })
-      .eq("id", conversationId);
-
-    if (error) {
-      console.error("Error updating conversation title:", error);
-      return;
-    }
-
-    setConversations(
-      conversations.map((conv) =>
-        conv.id === conversationId ? { ...conv, title: newTitle } : conv
-      )
-    );
-    
-    if (activeConversation?.id === conversationId) {
-      setActiveConversation({ ...activeConversation, title: newTitle });
-    }
-
-    setEditingTitle(null);
-  };
-
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() || !activeConversation) return;
+    if (!inputMessage.trim()) return;
     setIsLoading(true);
 
     try {
-      const { data: userMessageData, error: userMessageError } = await supabase
+      // Se não houver conversa ativa, cria uma nova
+      let currentConversation = activeConversation;
+      if (!currentConversation) {
+        currentConversation = await createNewConversation();
+        if (!currentConversation) return;
+        setActiveConversation(currentConversation);
+      }
+
+      // Adiciona a mensagem do usuário ao estado local imediatamente
+      const userMessage = {
+        id: Date.now().toString(),
+        conversation_id: currentConversation.id,
+        content: inputMessage,
+        sender: "user" as const,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+      setInputMessage("");
+
+      // Salva a mensagem do usuário no banco
+      const { error: userMessageError } = await supabase
         .from("messages")
         .insert([
           {
-            conversation_id: activeConversation.id,
+            conversation_id: currentConversation.id,
             content: inputMessage,
             sender: "user",
           },
-        ])
-        .select()
-        .single();
+        ]);
 
       if (userMessageError) throw userMessageError;
 
-      setMessages((prev) => [...prev, userMessageData]);
-      setInputMessage("");
+      // Envia a mensagem para a API junto com o histórico da conversa
+      const conversationHistory = messages.map((msg) => ({
+        role: msg.sender === "user" ? "user" : "assistant",
+        content: msg.content,
+      }));
 
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: inputMessage }),
+        body: JSON.stringify({
+          message: inputMessage,
+          history: conversationHistory,
+        }),
       });
 
       const data = await response.json();
 
-      const { data: botMessageData, error: botMessageError } = await supabase
-        .from("messages")
-        .insert([
-          {
-            conversation_id: activeConversation.id,
-            content: data.response,
-            sender: "bot",
-          },
-        ])
-        .select()
-        .single();
+      // Adiciona a resposta do bot ao estado local
+      const botMessage = {
+        id: (Date.now() + 1).toString(),
+        conversation_id: currentConversation.id,
+        content: data.response,
+        sender: "bot" as const,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, botMessage]);
 
-      if (botMessageError) throw botMessageError;
-
-      setMessages((prev) => [...prev, botMessageData]);
+      // Salva a resposta do bot no banco
+      await supabase.from("messages").insert([
+        {
+          conversation_id: currentConversation.id,
+          content: data.response,
+          sender: "bot",
+        },
+      ]);
     } catch (error) {
       console.error("Error sending message:", error);
     } finally {
@@ -203,25 +201,30 @@ const ChatInterface = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-gray-900">
+    <div className="flex flex-col h-screen bg-[#111B21]">
+      {" "}
+      {/* Fundo principal escuro */}
       {/* App Title */}
-      <div className="bg-gray-800 p-4 shadow-lg">
-        <h1 className="text-2xl font-bold text-white text-center">My Chatbot</h1>
+      <div className="bg-[#202C33] p-4 shadow-lg">
+        {" "}
+        {/* Cabeçalho escuro */}
+        <h1 className="text-2xl font-bold text-[#E9EDEF] text-center">
+          My Chatbot
+        </h1>
       </div>
-
       {/* Tabs */}
-      <div className="bg-gray-800 flex items-center px-4 py-2 space-x-2 overflow-x-auto">
+      <div className="bg-[#202C33] flex flex-wrap items-center px-4 py-2 gap-2">
         {conversations.map((conversation) => (
           <div
             key={conversation.id}
-            className={`group flex items-center min-w-[180px] max-w-[240px] rounded-t-lg px-4 py-2 ${
+            className={`group flex items-center min-w-[160px] max-w-full rounded-t-lg px-4 py-2 ${
               activeConversation?.id === conversation.id
-                ? "bg-gray-900 text-white"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
+                ? "bg-[#111B21] text-[#E9EDEF]"
+                : "bg-[#2A3942] text-[#E9EDEF] hover:bg-[#384147]"
             }`}
           >
             <div
-              className="flex-1 flex items-center cursor-pointer"
+              className="flex-1 flex items-center cursor-pointer truncate"
               onClick={() => setActiveConversation(conversation)}
             >
               {editingTitle === conversation.id ? (
@@ -230,57 +233,37 @@ const ChatInterface = () => {
                   type="text"
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  onBlur={() => saveTitle(conversation.id)}
-                  onKeyPress={(e) => e.key === "Enter" && saveTitle(conversation.id)}
-                  className="bg-transparent border-b border-blue-500 text-white w-full focus:outline-none"
+                  onBlur={() => setEditingTitle(null)}
+                  onKeyPress={(e) => e.key === "Enter" && setEditingTitle(null)}
+                  className="bg-transparent border-b border-[#00A884] text-[#E9EDEF] w-full focus:outline-none"
                 />
               ) : (
                 <span className="truncate">{conversation.title}</span>
               )}
             </div>
-            <div className="flex items-center ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
-              {editingTitle !== conversation.id ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="p-1 hover:bg-gray-700 text-gray-400 hover:text-white"
-                  onClick={() => startEditingTitle(conversation)}
-                >
-                  <Edit2 className="h-4 w-4" />
-                </Button>
-              ) : (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="p-1 hover:bg-gray-700 text-gray-400 hover:text-white"
-                  onClick={() => saveTitle(conversation.id)}
-                >
-                  <Check className="h-4 w-4" />
-                </Button>
-              )}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="p-1 hover:bg-gray-700 text-gray-400 hover:text-white"
-                onClick={() => deleteConversation(conversation.id)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="p-1 hover:bg-[#384147] text-[#8696A0]"
+              onClick={() => deleteConversation(conversation.id)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
           </div>
         ))}
         <Button
           onClick={createNewConversation}
           variant="ghost"
           size="sm"
-          className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg"
+          className="p-2 text-[#8696A0] hover:text-[#E9EDEF] hover:bg-[#384147] rounded-lg"
         >
           <Plus className="h-5 w-5" />
         </Button>
       </div>
-
       {/* Chat Area */}
-      <div className="flex-1 flex flex-col bg-gray-900">
+      <div className="flex-1 flex flex-col bg-[#0B141A]">
+        {" "}
+        {/* Área do chat escura */}
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.map((message) => (
@@ -293,32 +276,33 @@ const ChatInterface = () => {
               <Card
                 className={`max-w-[80%] p-3 ${
                   message.sender === "user"
-                    ? "bg-blue-600 text-white"
-                    : "bg-gray-700 text-white"
+                    ? "bg-[#005C4B] text-[#E9EDEF]" // Mensagens do usuário em verde escuro
+                    : "bg-[#202C33] text-[#E9EDEF]" // Mensagens do bot em cinza escuro
                 }`}
               >
                 {message.content}
               </Card>
             </div>
           ))}
+          <div ref={messagesEndRef} />
         </div>
-
         {/* Input */}
-        <div className="bg-gray-800 p-4">
-          <div className="flex space-x-2">
+        <div className="bg-[#202C33] p-4">
+          {" "}
+          {/* Área de input escura */}
+          <div className="flex flex-wrap gap-2">
             <input
               type="text"
               value={inputMessage}
               onChange={(e) => setInputMessage(e.target.value)}
               onKeyPress={(e) => e.key === "Enter" && handleSendMessage()}
               placeholder="Digite sua mensagem..."
-              disabled={!activeConversation}
-              className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1 bg-[#2A3942] text-[#E9EDEF] placeholder-[#8696A0] rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#00A884]"
             />
             <Button
               onClick={handleSendMessage}
-              disabled={isLoading || !activeConversation}
-              className="bg-blue-600 hover:bg-blue-700"
+              disabled={isLoading}
+              className="bg-[#00A884] hover:bg-[#02735E] text-[#E9EDEF]"
             >
               <Send className="h-5 w-5" />
             </Button>
